@@ -4,6 +4,7 @@
 #include <iostream>
 #include <set>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 enum class Side { Buy, Sell };
@@ -57,14 +58,29 @@ class OrderBookB {
     AskSet asks_;
     std::unordered_map<std::uint64_t, BidSet::iterator> bid_lookup_;
     std::unordered_map<std::uint64_t, AskSet::iterator> ask_lookup_;
+    std::unordered_set<std::uint64_t> seen_ids_;
     std::uint64_t next_timestamp_ = 0;
 
-    static Tick to_tick(double price) { return static_cast<Tick>(std::lround(price * 100.0)); }
+    static bool to_tick(Side side, double price, Tick& tick) {
+        if (!std::isfinite(price)) return false;
+        if (side == Side::Buy) {
+            if (price < 50.00 || price > 99.99) return false;
+        } else {
+            if (price < 100.01 || price > 150.00) return false;
+        }
+        double scaled = price * 100.0;
+        long rounded = std::lround(scaled);
+        if (std::abs(scaled - rounded) > 1e-6) return false;
+        tick = static_cast<Tick>(rounded);
+        return true;
+    }
 
 public:
     void add_order(std::uint64_t id, Side side, double price, long qty) {
-        if (bid_lookup_.count(id) || ask_lookup_.count(id)) return;
-        Order o{id, side, to_tick(price), qty, next_timestamp_++};
+        Tick tick;
+        if (qty <= 0 || !to_tick(side, price, tick)) return;
+        if (!seen_ids_.insert(id).second) return;
+        Order o{id, side, tick, qty, next_timestamp_++};
         if (side == Side::Buy) bid_lookup_[id] = bids_.insert(o);
         else                   ask_lookup_[id] = asks_.insert(o);
     }
@@ -103,6 +119,7 @@ public:
     }
 
     std::vector<Level> get_bids(int depth = 10) const {
+        if (depth <= 0) return {};
         std::vector<Level> v;
         for (const Order& o : bids_) {
             double price = o.tick / 100.0;
@@ -117,6 +134,7 @@ public:
     }
 
     std::vector<Level> get_asks(int depth = 10) const {
+        if (depth <= 0) return {};
         std::vector<Level> v;
         for (const Order& o : asks_) {
             double price = o.tick / 100.0;
@@ -158,5 +176,23 @@ int main() {
     assert(ob.get_bids(10).size() == 1);
     assert(ob.get_asks(10).size() == 1);
     assert(ob.get_bids(0).empty());
+    assert(ob.get_bids(-1).empty());
+
+    OrderBookB test;
+
+    test.add_order(100, Side::Buy, 99.98, 10);
+    assert(test.cancel_order(100));
+
+    test.add_order(100, Side::Buy, 99.99, 20);
+    assert(!test.cancel_order(100));
+    assert(!test.get_bbo().has_bid);
+
+    test.add_order(101, Side::Buy, 99.981, 10);
+    assert(!test.get_bbo().has_bid);
+
+    test.add_order(102, Side::Buy, 100.01, 10);
+    test.add_order(103, Side::Sell, 99.99, 10);
+    test.add_order(104, Side::Buy, 99.99, 0);
+    assert(!test.get_bbo().has_bid && !test.get_bbo().has_ask);
 
 }
