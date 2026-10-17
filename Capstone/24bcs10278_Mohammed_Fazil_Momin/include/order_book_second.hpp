@@ -1,28 +1,13 @@
-#include <cassert>
+#pragma once
+
 #include <cmath>
 #include <cstdint>
-#include <iostream>
 #include <set>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
 
-enum class Side { Buy, Sell };
-
-struct Level {
-    double price;
-    long qty;
-};
-
-struct BBO {
-    bool has_bid = false;
-    double bid_price = 0.0;
-    long bid_qty = 0;
-
-    bool has_ask = false;
-    double ask_price = 0.0;
-    long ask_qty = 0;
-};
+#include "order_book_common.hpp"
 
 class OrderBookB {
     using Tick = int;
@@ -32,13 +17,13 @@ class OrderBookB {
         Side side;
         Tick tick;
         long qty;
-        std::uint64_t timestamp;
+        std::uint64_t arrival_sequence;
     };
 
     struct BidPriority {
         bool operator()(const Order& a, const Order& b) const {
             if (a.tick != b.tick) return a.tick > b.tick;
-            if (a.timestamp != b.timestamp) return a.timestamp < b.timestamp;
+            if (a.arrival_sequence != b.arrival_sequence) return a.arrival_sequence < b.arrival_sequence;
             return a.id < b.id;
         }
     };
@@ -46,7 +31,7 @@ class OrderBookB {
     struct AskPriority {
         bool operator()(const Order& a, const Order& b) const {
             if (a.tick != b.tick) return a.tick < b.tick;
-            if (a.timestamp != b.timestamp) return a.timestamp < b.timestamp;
+            if (a.arrival_sequence != b.arrival_sequence) return a.arrival_sequence < b.arrival_sequence;
             return a.id < b.id;
         }
     };
@@ -59,7 +44,7 @@ class OrderBookB {
     std::unordered_map<std::uint64_t, BidSet::iterator> bid_lookup_;
     std::unordered_map<std::uint64_t, AskSet::iterator> ask_lookup_;
     std::unordered_set<std::uint64_t> seen_ids_;
-    std::uint64_t next_timestamp_ = 0;
+    std::uint64_t next_sequence_ = 0;
 
     static bool to_tick(Side side, double price, Tick& tick) {
         if (!std::isfinite(price)) return false;
@@ -80,7 +65,7 @@ public:
         Tick tick;
         if (qty <= 0 || !to_tick(side, price, tick)) return;
         if (!seen_ids_.insert(id).second) return;
-        Order o{id, side, tick, qty, next_timestamp_++};
+        Order o{id, side, tick, qty, next_sequence_++};
         if (side == Side::Buy) bid_lookup_[id] = bids_.insert(o);
         else                   ask_lookup_[id] = asks_.insert(o);
     }
@@ -148,51 +133,3 @@ public:
         return v;
     }
 };
-
-int main() {
-    OrderBookB ob;
-    BBO e = ob.get_bbo();
-    assert(!e.has_bid && !e.has_ask);
-    assert(!ob.cancel_order(999));
-
-    ob.add_order(1, Side::Buy, 99.98, 100);
-    ob.add_order(2, Side::Buy, 99.98, 50);
-    ob.add_order(3, Side::Buy, 99.50, 10);
-    ob.add_order(4, Side::Sell, 100.01, 20);
-    ob.add_order(5, Side::Sell, 100.05, 30);
-
-    BBO b = ob.get_bbo();
-    assert(b.has_bid && b.bid_price == 99.98 && b.bid_qty == 150);
-    assert(b.has_ask && b.ask_price == 100.01 && b.ask_qty == 20);
-
-    assert(ob.cancel_order(1) && !ob.cancel_order(1));
-    assert(ob.get_bbo().bid_qty == 50);
-    assert(ob.cancel_order(2));
-    assert(ob.get_bbo().bid_price == 99.50);
-
-    assert(ob.cancel_order(4));
-    assert(ob.get_bbo().ask_price == 100.05);
-
-    assert(ob.get_bids(10).size() == 1);
-    assert(ob.get_asks(10).size() == 1);
-    assert(ob.get_bids(0).empty());
-    assert(ob.get_bids(-1).empty());
-
-    OrderBookB test;
-
-    test.add_order(100, Side::Buy, 99.98, 10);
-    assert(test.cancel_order(100));
-
-    test.add_order(100, Side::Buy, 99.99, 20);
-    assert(!test.cancel_order(100));
-    assert(!test.get_bbo().has_bid);
-
-    test.add_order(101, Side::Buy, 99.981, 10);
-    assert(!test.get_bbo().has_bid);
-
-    test.add_order(102, Side::Buy, 100.01, 10);
-    test.add_order(103, Side::Sell, 99.99, 10);
-    test.add_order(104, Side::Buy, 99.99, 0);
-    assert(!test.get_bbo().has_bid && !test.get_bbo().has_ask);
-
-}
