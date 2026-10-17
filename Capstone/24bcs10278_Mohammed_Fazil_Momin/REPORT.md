@@ -4,29 +4,24 @@ Student: Mohammed Fazil Momin
 Roll Number: `24BCS10278`  
 
 Workload: 1,000,000 operations, seed 42, 70% add / 20% cancel / 10% BBO,
-`get_bids(10)` and `get_asks(10)` every 100 operations. 5 runs each, median
-reported. Built with `g++ -std=c++20 -O2`.
+depth queries every 100 operations. 5 runs each, median reported.
+Built with `g++ -std=c++20 -O2`. Run on Ubuntu 26.04 (WSL2), Intel i7-13650HX.
 
 ## Results table
 
-Timing rows are from the Windows dev machine. **Replace with the Linux numbers
-from `run_perf.sh` and fill the perf rows from `results/perf_stat_*.txt`.**
-
 | Metric | Implementation A | Implementation B | Implementation C |
 |---|---|---|---|
-| Total time (ms) | 6019 | 1201 | 375 |
-| ns / add | 296 | 1195 | 323 |
-| ns / cancel | 553 | 912 | 501 |
-| ns / BBO | 65 | 507 | 38 |
-| IPC | `<perf>` | `<perf>` | `<perf>` |
-| Branch misses (%) | `<perf>` | `<perf>` | `<perf>` |
-| L1-dcache-load-misses | `<perf>` | `<perf>` | `<perf>` |
-| Cache misses | `<perf>` | `<perf>` | `<perf>` |
-| Page faults | `<perf>` | `<perf>` | `<perf>` |
+| Total time (ms) | 6901 | 1041 | 236 |
+| ns / add | 256 | 1028 | 172 |
+| ns / cancel | 523 | 759 | 390 |
+| ns / BBO | 73 | 410 | 30 |
+| Page faults | 33,297 | 33,799 | 31,943 |
 
-Counters unavailable on the machine: `<list, or "none">`
+IPC, branch misses and cache misses are not available: WSL2 does not expose the
+CPU hardware counters, so perf reports them as `<not supported>`. Only
+`task-clock` and `page-faults` could be measured.
 
-All three end with the same BBO and checksum:
+All three give the same final result:
 
 ```
 Bid: 99.99 x 2542
@@ -39,79 +34,112 @@ Checksum: 1491614064682522636
 ### A
 
 ```
-<paste results/perf_stat_A.txt>
+ Performance counter stats for './bench --impl A --runs 1' (5 runs):
+
+        7003130953      task-clock:u                     #    0.999 CPUs utilized               ( +-  0.16% )
+   <not supported>      cycles:u
+   <not supported>      instructions:u
+   <not supported>      branches:u
+   <not supported>      branch-misses:u
+   <not supported>      cache-misses:u
+   <not supported>      L1-dcache-load-misses:u
+   <not supported>      dTLB-load-misses:u
+             33297      page-faults:u                    #    4.755 K/sec                       ( +-  0.00% )
+
+            7.0075 +- 0.0113 seconds time elapsed  ( +-  0.16% )
 ```
 
 ### B
 
 ```
-<paste results/perf_stat_B.txt>
+ Performance counter stats for './bench --impl B --runs 1' (5 runs):
+
+        1343223032      task-clock:u                     #    0.997 CPUs utilized               ( +-  1.84% )
+   <not supported>      cycles:u
+   <not supported>      instructions:u
+   <not supported>      branches:u
+   <not supported>      branch-misses:u
+   <not supported>      cache-misses:u
+   <not supported>      L1-dcache-load-misses:u
+   <not supported>      dTLB-load-misses:u
+             33799      page-faults:u                    #   25.163 K/sec                       ( +-  0.00% )
+
+            1.3477 +- 0.0248 seconds time elapsed  ( +-  1.84% )
 ```
 
 ### C
 
 ```
-<paste results/perf_stat_C.txt>
+ Performance counter stats for './bench --impl C --runs 1' (5 runs):
+
+         457907356      task-clock:u                     #    0.992 CPUs utilized               ( +-  1.55% )
+   <not supported>      cycles:u
+   <not supported>      instructions:u
+   <not supported>      branches:u
+   <not supported>      branch-misses:u
+   <not supported>      cache-misses:u
+   <not supported>      L1-dcache-load-misses:u
+   <not supported>      dTLB-load-misses:u
+             31943      page-faults:u                    #   69.759 K/sec                       ( +-  0.00% )
+
+           0.46143 +- 0.00719 seconds time elapsed  ( +-  1.56% )
 ```
+
+## perf record
+
+Full output in `results/perf_report_*.txt`. Symbols show as addresses because
+the WSL perf build has no libelf.
+
+- **A:** almost all samples are in the program itself, with two addresses taking
+  over 20%. That is the depth query, which sorts all live levels on every call.
+- **B:** two addresses take 18% each. Those are the two tree comparators. About
+  14% is in libstdc++ and libc, which is tree rebalancing and malloc/free.
+- **C:** libc (malloc/free) is the biggest item at 18%. The order book code
+  itself is very cheap.
 
 ## 11.1 Which implementation is fastest?
 
-- **add_order:** A and C are close. B is about 4x slower because a tree insert
-  has to compare and rebalance through pointer-linked nodes.
-- **cancel_order:** C, then A, then B. C unlinks one list node and subtracts
-  from one array slot. B does a tree erase with rebalancing.
-- **get_bbo:** C is fastest. It reads two integers and two array slots. B is
-  slowest because it walks every order at the best level to sum the quantity.
-- **Total time:** A is slowest overall even though its per-op numbers are fine.
-  Its depth query sorts all live levels on every call, and that dominates.
+C is fastest for all three operations.
+
+- **add:** C finds the price level by array index. A pushes onto a heap. B
+  inserts into a tree, which is the slowest.
+- **cancel:** C removes one list node. A updates a hash map. B erases from a
+  tree and rebalances.
+- **BBO:** C reads two stored integers. A has to pop stale heap entries first.
+  B walks every order at the best price to add up the quantity.
+
+A has the worst total time because its depth query sorts every live level on
+each call.
 
 ## 11.2 Branch prediction
 
-`<fill from perf: which has the highest branch-miss %>`
-
-Expected: B. Every tree insert and erase is a chain of left-or-right decisions
-driven by random prices, so the predictor cannot learn them. C's add path is
-almost branch free.
+Hardware counters were not available. From the code, B should have the most
+branch misses: every tree insert and erase is a chain of left/right decisions
+on random prices. A's sort is next. C's add path has almost no branches.
 
 ## 11.3 Cache behaviour
 
-`<fill from perf: which has the most cache misses>`
-
-Expected: B. Each order is its own heap-allocated tree node, so every operation
-follows pointers into scattered memory. C's price levels are one contiguous
-array, so finding a level is a single indexed load. A's heap is contiguous but
-grows with stale entries, and its hash maps are pointer based.
+Hardware counters were not available. From the layout, B should miss the most:
+every order is a separate heap-allocated tree node, so it follows pointers into
+scattered memory and allocates many small objects. A's heap is contiguous but
+grows with stale entries. C's price levels are one contiguous array, so finding
+a level is a single load.
 
 ## 11.4 Page faults
 
-`<fill from perf: which has the most page faults>`
-
-Expected: B, then A, then C. B allocates one node per order. A's heap vector
-keeps cancelled orders until they reach the top, so it grows larger than the
-live count. C allocates its 10,000 level slots once at start-up.
+B 33,799, A 33,297, C 31,943. They are close because most faults come from the
+1,000,000-entry workload array in the benchmark itself. B is highest because it
+allocates one node per order. C is lowest because its level arrays are
+allocated once at start-up.
 
 ## 11.5 Production choice
 
-**C.** Lowest latency, but more importantly the most predictable: add, cancel
-and BBO each do a fixed small amount of work no matter how many orders are
-resting. Memory is bounded and known at start-up. The code is the simplest to
-read because the price is the array index.
+**C.** It is the fastest, and more importantly its cost per operation does not
+grow with the number of orders, so latency is predictable. Memory is fixed at
+start-up. The code is simple because the price is the array index.
 
-Trade-offs: C is tied to the spec's price band, so a different instrument
-means resizing the arrays. After a cancel empties the best level it scans
-toward the mid price, which could be a long walk in a thin book.
+Trade-off: the arrays are sized to the spec's price band, and a cancel that
+empties the best level has to scan to the next one.
 
-B is the one I would not deploy. Its latency grows with the number of live
-orders and its BBO cost grows with the size of the best level. A is a middle
-ground, but its depth query is too slow and its heap grows without bound.
-
-## 11.6 What I would try next
-
-1. A bitmap over the price levels in C so the best-price scan after a cancel
-   becomes one find-first-set instruction.
-2. A dense array indexed by order id instead of the hash map, since ids are
-   sequential.
-3. An object pool for list nodes so per-order allocations come from one arena.
-4. Pre-reserving every hash map and vector to the expected order count.
-5. Fixing A's depth query by keeping levels sorted instead of sorting on every
-   call.
+B is the one to avoid: tree depth and BBO cost both grow with the book. A is
+fine for add and cancel but its depth query is too slow.

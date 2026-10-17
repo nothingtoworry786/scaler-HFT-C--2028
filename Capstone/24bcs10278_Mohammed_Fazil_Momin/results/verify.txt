@@ -1,3 +1,4 @@
+== verify ==
 Running correctness test over 1000000 operations...
 
 Implementation A: PASS
